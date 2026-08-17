@@ -4,6 +4,7 @@ import {
   MarkdownView,
   Modal,
   Notice,
+  normalizePath,
   Plugin,
   PluginSettingTab,
   Setting,
@@ -18,6 +19,7 @@ const VIEW_TYPE = "calendar-deadlines-view";
 interface DeadlineTask {
   text: string;
   due: string;       // "YYYY-MM-DD"
+  subjects: string[]; // subject tags, e.g. "MAT1100" (from "#MAT1100"); empty when untagged
   filePath: string;
   line: number;
 }
@@ -25,6 +27,10 @@ interface DeadlineTask {
 interface PluginSettings {
   offsets: number[]; // days before due date to notify
   todoFile: string;  // file to append quick-add tasks to
+  subjectColors: Record<string, string>; // subject name -> hex color
+  activeSubjectFilter: string[]; // subjects currently hidden from view; empty = show all
+  showDeadlineList: boolean; // whether the "Upcoming deadlines" list is expanded
+  autoOpenSidebar: boolean;  // open the calendar sidebar automatically on startup
 }
 
 interface SavedData {
@@ -36,6 +42,10 @@ interface SavedData {
 const DEFAULT_SETTINGS: PluginSettings = {
   offsets: [0, 1],
   todoFile: "TODO.md",
+  subjectColors: {},
+  activeSubjectFilter: [],
+  showDeadlineList: true,
+  autoOpenSidebar: false,
 };
 
 const OFFSET_OPTIONS: { days: number; label: string; desc: string }[] = [
@@ -45,10 +55,93 @@ const OFFSET_OPTIONS: { days: number; label: string; desc: string }[] = [
   { days: 7, label: "1 week before",    desc: "Notify 7 days in advance" },
 ];
 
+// Pseudo-subject used to represent tasks with no #subject tag, so they get
+// their own filter chip and dot instead of being unconditionally shown.
+const UNCATEGORIZED = "All";
+
+// ─── Subject colors ───────────────────────────────────────────────────────────
+
+// Obsidian's built-in theme color variables, used as the auto-assignment
+// palette so a subject's *initial* color matches the user's theme at the
+// moment it's first assigned (light/dark, accent). The resolved hex is then
+// frozen into settings.subjectColors — it does not track later theme
+// changes, since it must stay a plain editable hex for the color picker.
+const SUBJECT_COLOR_VARS = [
+  "--color-red",
+  "--color-orange",
+  "--color-yellow",
+  "--color-green",
+  "--color-cyan",
+  "--color-blue",
+  "--color-purple",
+  "--color-pink",
+];
+
+function hashSubject(subject: string): number {
+  let hash = 0;
+  for (let i = 0; i < subject.length; i++) {
+    hash = (hash * 31 + subject.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
+function resolveThemeColor(cssVar: string): string {
+  const value = getComputedStyle(document.body).getPropertyValue(cssVar).trim();
+  return value || "#888888";
+}
+
+// Returns the color assigned to a subject. The first time a given subject is
+// seen, a color is deterministically picked from the theme palette and
+// recorded into `settings.subjectColors` so the same subject always gets the
+// same color. Callers must still call plugin.saveSettings() to persist a
+// newly-assigned color to disk.
+function getSubjectColor(settings: PluginSettings, subject: string): string {
+  const existing = settings.subjectColors[subject];
+  if (existing) return existing;
+
+  const cssVar = SUBJECT_COLOR_VARS[hashSubject(subject) % SUBJECT_COLOR_VARS.length];
+  const color = resolveThemeColor(cssVar);
+  settings.subjectColors[subject] = color;
+  return color;
+}
+
 // ─── Task extraction ──────────────────────────────────────────────────────────
 
 const DUE_RE =
   /📅\s*(\d{4}-\d{2}-\d{2})|due::\s*(\d{4}-\d{2}-\d{2})|⏳\s*(\d{4}-\d{2}-\d{2})/;
+
+// Subject tag characters: ASCII word chars plus Norwegian æøå/ÆØÅ. Keep this
+// character class in sync with the one in AddTaskModal's subject sanitizer.
+const SUBJECT_TAG_RE = /#([\wæøåÆØÅ]+)/g;
+
+interface ParsedTaskLine {
+  text: string;
+  due: string;
+  subjects: string[];
+}
+
+function parseTaskLine(line: string): ParsedTaskLine | null {
+  if (!/^[\s]*-\s+\[[ ]\]/.test(line)) return null;
+  const match = line.match(DUE_RE);
+  if (!match) return null;
+  const due = match[1] ?? match[2] ?? match[3];
+
+  const withoutPrefix = line
+    .replace(/^[\s]*-\s+\[[ ]\]\s*/, "")
+    .replace(DUE_RE, "")
+    .replace(/[⏫🔼🔽⏬📅⏳🛫✅❌]/g, "");
+
+  const subjects: string[] = [];
+  const text = withoutPrefix
+    .replace(SUBJECT_TAG_RE, (_full, tag: string) => {
+      subjects.push(tag);
+      return "";
+    })
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  return { text, due, subjects };
+}
 
 async function collectTasks(app: App): Promise<DeadlineTask[]> {
   const tasks: DeadlineTask[] = [];
@@ -62,17 +155,9 @@ async function collectTasks(app: App): Promise<DeadlineTask[]> {
     }
     const lines = content.split("\n");
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (!/^[\s]*-\s+\[[ ]\]/.test(line)) continue;
-      const match = line.match(DUE_RE);
-      if (!match) continue;
-      const due = match[1] ?? match[2] ?? match[3];
-      const text = line
-        .replace(/^[\s]*-\s+\[[ ]\]\s*/, "")
-        .replace(DUE_RE, "")
-        .replace(/[⏫🔼🔽⏬📅⏳🛫✅❌]/g, "")
-        .trim();
-      tasks.push({ text, due, filePath: file.path, line: i });
+      const parsed = parseTaskLine(lines[i]);
+      if (!parsed) continue;
+      tasks.push({ ...parsed, filePath: file.path, line: i });
     }
   }
 
@@ -97,17 +182,104 @@ async function openTask(app: App, task: DeadlineTask) {
   }
 }
 
+// ─── Date formatting ──────────────────────────────────────────────────────────
+
+function formatDateYMD(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function todayDateStr(): string {
+  return formatDateYMD(new Date());
+}
+
+function shiftDateStr(dateStr: string, days: number): string {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return formatDateYMD(d);
+}
+
+// ─── Complete / postpone task in place ─────────────────────────────────────────
+
+// Re-reads the file fresh (not from cache) and verifies the target line still
+// looks like the expected task before mutating it, since `task.line` was
+// captured by a possibly-stale collectTasks() scan.
+async function completeTask(app: App, task: DeadlineTask): Promise<boolean> {
+  const file = app.vault.getAbstractFileByPath(task.filePath);
+  if (!(file instanceof TFile)) return false;
+
+  const content = await app.vault.read(file);
+  const lines = content.split("\n");
+  const line = lines[task.line];
+  if (line === undefined || !/^[\s]*-\s+\[ \]/.test(line)) {
+    new Notice("Couldn't complete task — the file may have changed. Open it to update manually.");
+    return false;
+  }
+
+  lines[task.line] = line.replace(/^(\s*-\s+)\[ \]/, "$1[x]") + ` ✅ ${todayDateStr()}`;
+  await app.vault.modify(file, lines.join("\n"));
+  new Notice("Task completed");
+  return true;
+}
+
+async function postponeTask(app: App, task: DeadlineTask, days: number): Promise<boolean> {
+  const file = app.vault.getAbstractFileByPath(task.filePath);
+  if (!(file instanceof TFile)) return false;
+
+  const content = await app.vault.read(file);
+  const lines = content.split("\n");
+  const line = lines[task.line];
+  const match = line === undefined ? null : line.match(DUE_RE);
+  if (!match) {
+    new Notice("Couldn't postpone task — the file may have changed. Open it to update manually.");
+    return false;
+  }
+
+  const oldDate = match[1] ?? match[2] ?? match[3];
+  const newDate = shiftDateStr(oldDate, days);
+  // Replace only within the DUE_RE match itself (not line.replace(oldDate, ...),
+  // which would corrupt the line if the date string happens to also appear
+  // earlier in the task text, e.g. the description mentioning the same date).
+  lines[task.line] = line.replace(DUE_RE, m => m.replace(oldDate, newDate));
+  await app.vault.modify(file, lines.join("\n"));
+  new Notice(`Postponed to ${newDate}`);
+  return true;
+}
+
 // ─── Calendar renderer ────────────────────────────────────────────────────────
 
-function renderCalendar(
-  container: HTMLElement,
-  tasks: DeadlineTask[],
-  currentMonth: number,
-  currentYear: number,
-  onNav: (month: number, year: number) => void,
-  onTaskClick: (task: DeadlineTask) => void,
-  onDateClick?: (dateStr: string) => void
-) {
+interface RenderCalendarOptions {
+  tasks: DeadlineTask[];
+  currentMonth: number;
+  currentYear: number;
+  subjectColors: Record<string, string>;
+  activeSubjectFilter: string[]; // subjects currently hidden from view; empty = show all
+  showDeadlineList: boolean;
+  onNav: (month: number, year: number) => void;
+  onTaskClick: (task: DeadlineTask) => void;
+  onFilterChange: (hiddenSubjects: string[]) => void;
+  onToggleDeadlineList: () => void;
+  onCompleteTask: (task: DeadlineTask) => void;
+  onPostponeTask: (task: DeadlineTask) => void;
+  onDateClick?: (dateStr: string) => void;
+}
+
+function renderCalendar(container: HTMLElement, options: RenderCalendarOptions) {
+  const {
+    tasks,
+    currentMonth,
+    currentYear,
+    subjectColors,
+    activeSubjectFilter,
+    showDeadlineList,
+    onNav,
+    onTaskClick,
+    onFilterChange,
+    onToggleDeadlineList,
+    onCompleteTask,
+    onPostponeTask,
+    onDateClick,
+  } = options;
+
   container.empty();
 
   const today = new Date();
@@ -115,16 +287,33 @@ function renderCalendar(
     today.getFullYear(), today.getMonth(), today.getDate()
   ).getTime();
 
-  const deadlineDates = new Map<string, string[]>();
-  for (const t of tasks) {
-    if (!deadlineDates.has(t.due)) deadlineDates.set(t.due, []);
-    deadlineDates.get(t.due)!.push(t.text);
+  // Untagged tasks count as the UNCATEGORIZED pseudo-subject. A task is
+  // hidden once every subject it effectively has is hidden.
+  const isHiddenByFilter = (t: DeadlineTask) => {
+    const effectiveSubjects = t.subjects.length > 0 ? t.subjects : [UNCATEGORIZED];
+    return effectiveSubjects.every(s => activeSubjectFilter.includes(s));
+  };
+  const visibleTasks = tasks.filter(t => !isHiddenByFilter(t));
+
+  // Per date: the task texts (for the aria-label) and the distinct subjects
+  // due that day, used to render one colored dot per subject.
+  const deadlineDates = new Map<string, { texts: string[]; subjects: string[] }>();
+  for (const t of visibleTasks) {
+    if (!deadlineDates.has(t.due)) deadlineDates.set(t.due, { texts: [], subjects: [] });
+    const entry = deadlineDates.get(t.due)!;
+    entry.texts.push(t.text);
+    for (const s of t.subjects.length > 0 ? t.subjects : [UNCATEGORIZED]) {
+      if (!entry.subjects.includes(s)) entry.subjects.push(s);
+    }
   }
+  const MAX_VISIBLE_DOTS = 3;
 
   // ── Stats bar ──────────────────────────────────────────────────────────────
-  const overdueCount  = tasks.filter(t => new Date(t.due + "T00:00:00").getTime() < todayMs).length;
-  const todayCount    = tasks.filter(t => new Date(t.due + "T00:00:00").getTime() === todayMs).length;
-  const weekCount     = tasks.filter(t => {
+  // Counts respect the subject filter (unlike the ribbon badge, which
+  // intentionally always shows the unfiltered total — see updateBadge()).
+  const overdueCount  = visibleTasks.filter(t => new Date(t.due + "T00:00:00").getTime() < todayMs).length;
+  const todayCount    = visibleTasks.filter(t => new Date(t.due + "T00:00:00").getTime() === todayMs).length;
+  const weekCount     = visibleTasks.filter(t => {
     const d = Math.ceil((new Date(t.due + "T00:00:00").getTime() - todayMs) / 86400000);
     return d > 0 && d <= 7;
   }).length;
@@ -141,6 +330,12 @@ function renderCalendar(
   addStat(weekCount,    "this week",  "cdp-stat-week");
   if (overdueCount === 0 && todayCount === 0 && weekCount === 0) {
     stats.createSpan({ text: "No upcoming deadlines", cls: "cdp-stat cdp-stat-clear" });
+  }
+  if (activeSubjectFilter.length > 0) {
+    stats.createSpan({
+      text: `${activeSubjectFilter.length} subject${activeSubjectFilter.length > 1 ? "s" : ""} hidden`,
+      cls: "cdp-stat cdp-stat-filtered",
+    });
   }
 
   // ── Header ─────────────────────────────────────────────────────────────────
@@ -168,6 +363,32 @@ function renderCalendar(
     if (m > 11) { m = 0; y++; }
     onNav(m, y);
   });
+
+  // ── Subject filter chips ──────────────────────────────────────────────────
+  const allSubjects = [...new Set(tasks.flatMap(t => t.subjects))].sort((a, b) =>
+    a.localeCompare(b)
+  );
+  if (tasks.some(t => t.subjects.length === 0)) {
+    allSubjects.push(UNCATEGORIZED);
+  }
+  if (allSubjects.length > 0) {
+    const filterRow = container.createDiv({ cls: "cdp-filter-row" });
+    for (const subject of allSubjects) {
+      const isHidden = activeSubjectFilter.includes(subject);
+      const chip = filterRow.createEl("button", {
+        text: subject,
+        cls: `cdp-chip${isHidden ? " cdp-chip-hidden" : ""}`,
+      });
+      chip.style.setProperty("--cdp-chip-color", subjectColors[subject] ?? "var(--text-faint)");
+      chip.setAttribute("title", isHidden ? `Show ${subject}` : `Hide ${subject}`);
+      chip.addEventListener("click", () => {
+        const next = isHidden
+          ? activeSubjectFilter.filter(s => s !== subject)
+          : [...activeSubjectFilter, subject];
+        onFilterChange(next);
+      });
+    }
+  }
 
   // ── Grid ───────────────────────────────────────────────────────────────────
   const grid = container.createDiv({ cls: "cdp-grid" });
@@ -202,7 +423,22 @@ function renderCalendar(
 
     const cell = grid.createDiv({ text: `${d}`, cls });
     if (hasDeadline) {
-      cell.setAttribute("aria-label", deadlineDates.get(dateStr)!.join(", "));
+      const entry = deadlineDates.get(dateStr)!;
+      cell.setAttribute("aria-label", entry.texts.join(", "));
+
+      const dotsRow = cell.createDiv({ cls: "cdp-dots" });
+      const shownSubjects = entry.subjects.slice(0, MAX_VISIBLE_DOTS);
+      for (const subject of shownSubjects) {
+        const dot = dotsRow.createSpan({ cls: "cdp-dot" });
+        dot.style.setProperty(
+          "--cdp-dot-color",
+          subject === UNCATEGORIZED ? "var(--text-faint)" : subjectColors[subject] ?? "var(--text-faint)"
+        );
+      }
+      const overflow = entry.subjects.length - shownSubjects.length;
+      if (overflow > 0) {
+        dotsRow.createSpan({ text: `+${overflow}`, cls: "cdp-dot-overflow" });
+      }
     }
     if (onDateClick) {
       cell.addClass("cdp-day-addable");
@@ -220,9 +456,19 @@ function renderCalendar(
   // ── Deadlines list ─────────────────────────────────────────────────────────
   container.createEl("hr", { cls: "cdp-divider" });
   const section = container.createDiv({ cls: "cdp-deadlines" });
-  section.createEl("h4", { text: "Upcoming deadlines", cls: "cdp-section-title" });
 
-  const upcoming = tasks.slice(0, 10);
+  const sectionHeader = section.createDiv({ cls: "cdp-section-header" });
+  sectionHeader.createEl("h4", { text: "Upcoming deadlines", cls: "cdp-section-title" });
+  const toggleBtn = sectionHeader.createEl("button", {
+    text: showDeadlineList ? "▾" : "▸",
+    cls: "cdp-section-toggle",
+  });
+  toggleBtn.setAttribute("aria-label", showDeadlineList ? "Collapse list" : "Expand list");
+  toggleBtn.addEventListener("click", () => onToggleDeadlineList());
+
+  if (!showDeadlineList) return;
+
+  const upcoming = visibleTasks.slice(0, 10);
   if (upcoming.length === 0) {
     section.createDiv({ text: "No upcoming deadlines", cls: "cdp-empty" });
     return;
@@ -232,6 +478,18 @@ function renderCalendar(
     const row = section.createDiv({ cls: "cdp-item cdp-item-clickable" });
     row.setAttribute("title", `Open in ${item.filePath}`);
     row.addEventListener("click", () => onTaskClick(item));
+
+    const checkbox = row.createEl("input", { type: "checkbox", cls: "cdp-item-checkbox" });
+    checkbox.setAttribute("title", "Mark as done");
+    checkbox.addEventListener("click", (e) => {
+      // Prevent the native checked-state toggle: onCompleteTask() may fail
+      // (e.g. the file changed underneath us), and on success the row is
+      // removed by a redraw anyway, so there's nothing for the checkbox
+      // itself to visually reflect either way.
+      e.preventDefault();
+      e.stopPropagation();
+      onCompleteTask(item);
+    });
 
     const dueDate = new Date(item.due + "T00:00:00");
     const diffDays = Math.ceil((dueDate.getTime() - todayMs) / 86400000);
@@ -253,6 +511,13 @@ function renderCalendar(
 
     row.createDiv({ text: label, cls: labelCls });
     row.createDiv({ text: item.text, cls: "cdp-item-text" });
+
+    const postponeBtn = row.createEl("button", { text: "+1d", cls: "cdp-item-postpone" });
+    postponeBtn.setAttribute("title", "Postpone by 1 day");
+    postponeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onPostponeTask(item);
+    });
   }
 }
 
@@ -279,6 +544,7 @@ class CalendarView extends ItemView {
 
   async onOpen() {
     this.tasks = await collectTasks(this.app);
+    await this.plugin.ensureSubjectColors(this.tasks);
     this.redraw();
 
     this.registerEvent(
@@ -291,19 +557,38 @@ class CalendarView extends ItemView {
 
   private redraw() {
     const content = this.containerEl.children[1] as HTMLElement;
-    renderCalendar(
-      content,
-      this.tasks,
-      this.month,
-      this.year,
-      (m, y) => { this.month = m; this.year = y; this.redraw(); },
-      (task) => openTask(this.app, task),
-      (dateStr) => new AddTaskModal(this.app, this.plugin.settings.todoFile, dateStr).open()
-    );
+    renderCalendar(content, {
+      tasks: this.tasks,
+      currentMonth: this.month,
+      currentYear: this.year,
+      subjectColors: this.plugin.settings.subjectColors,
+      activeSubjectFilter: this.plugin.settings.activeSubjectFilter,
+      showDeadlineList: this.plugin.settings.showDeadlineList,
+      onNav: (m, y) => { this.month = m; this.year = y; this.redraw(); },
+      onTaskClick: (task) => openTask(this.app, task),
+      onFilterChange: async (hiddenSubjects) => {
+        this.plugin.settings.activeSubjectFilter = hiddenSubjects;
+        await this.plugin.saveSettings();
+        this.redraw();
+      },
+      onToggleDeadlineList: async () => {
+        this.plugin.settings.showDeadlineList = !this.plugin.settings.showDeadlineList;
+        await this.plugin.saveSettings();
+        this.redraw();
+      },
+      onCompleteTask: async (task) => {
+        if (await completeTask(this.app, task)) await this.refresh();
+      },
+      onPostponeTask: async (task) => {
+        if (await postponeTask(this.app, task, 1)) await this.refresh();
+      },
+      onDateClick: (dateStr) => new AddTaskModal(this.app, this.plugin, dateStr).open(),
+    });
   }
 
   async refresh() {
     this.tasks = await collectTasks(this.app);
+    await this.plugin.ensureSubjectColors(this.tasks);
     this.redraw();
   }
 
@@ -318,14 +603,14 @@ class CalendarView extends ItemView {
 // ─── Modal ────────────────────────────────────────────────────────────────────
 
 class CalendarModal extends Modal {
-  private todoFile: string;
+  private plugin: CalendarDeadlinesPlugin;
   private tasks: DeadlineTask[];
   private month: number;
   private year: number;
 
-  constructor(app: App, tasks: DeadlineTask[], todoFile: string) {
+  constructor(app: App, plugin: CalendarDeadlinesPlugin, tasks: DeadlineTask[]) {
     super(app);
-    this.todoFile = todoFile;
+    this.plugin = plugin;
     this.tasks = tasks;
     const now = new Date();
     this.month = now.getMonth();
@@ -337,16 +622,40 @@ class CalendarModal extends Modal {
     this.redraw();
   }
 
+  private async refreshTasks() {
+    this.tasks = await collectTasks(this.app);
+    await this.plugin.ensureSubjectColors(this.tasks);
+    this.redraw();
+  }
+
   private redraw() {
-    renderCalendar(
-      this.contentEl,
-      this.tasks,
-      this.month,
-      this.year,
-      (m, y) => { this.month = m; this.year = y; this.redraw(); },
-      (task) => { this.close(); openTask(this.app, task); },
-      (dateStr) => { this.close(); new AddTaskModal(this.app, this.todoFile, dateStr).open(); }
-    );
+    renderCalendar(this.contentEl, {
+      tasks: this.tasks,
+      currentMonth: this.month,
+      currentYear: this.year,
+      subjectColors: this.plugin.settings.subjectColors,
+      activeSubjectFilter: this.plugin.settings.activeSubjectFilter,
+      showDeadlineList: this.plugin.settings.showDeadlineList,
+      onNav: (m, y) => { this.month = m; this.year = y; this.redraw(); },
+      onTaskClick: (task) => { this.close(); openTask(this.app, task); },
+      onFilterChange: async (hiddenSubjects) => {
+        this.plugin.settings.activeSubjectFilter = hiddenSubjects;
+        await this.plugin.saveSettings();
+        this.redraw();
+      },
+      onToggleDeadlineList: async () => {
+        this.plugin.settings.showDeadlineList = !this.plugin.settings.showDeadlineList;
+        await this.plugin.saveSettings();
+        this.redraw();
+      },
+      onCompleteTask: async (task) => {
+        if (await completeTask(this.app, task)) await this.refreshTasks();
+      },
+      onPostponeTask: async (task) => {
+        if (await postponeTask(this.app, task, 1)) await this.refreshTasks();
+      },
+      onDateClick: (dateStr) => { this.close(); new AddTaskModal(this.app, this.plugin, dateStr).open(); },
+    });
   }
 
   onClose() {
@@ -357,30 +666,26 @@ class CalendarModal extends Modal {
 // ─── Add Task Modal ───────────────────────────────────────────────────────────
 
 class AddTaskModal extends Modal {
-  private todoFile: string;
+  private plugin: CalendarDeadlinesPlugin;
   private date: string;
 
-  constructor(app: App, todoFile: string, date: string) {
+  constructor(app: App, plugin: CalendarDeadlinesPlugin, date?: string) {
     super(app);
-    this.todoFile = todoFile;
-    this.date = date;
+    this.plugin = plugin;
+    this.date = date ?? todayDateStr();
   }
 
   onOpen() {
     const { contentEl } = this;
-    const [y, m, d] = this.date.split("-").map(Number);
-    const MONTHS = [
-      "January","February","March","April","May","June",
-      "July","August","September","October","November","December",
-    ];
-    this.titleEl.setText(`Add task — ${MONTHS[m - 1]} ${d}, ${y}`);
+    this.titleEl.setText("Add task");
 
     let taskText = "";
+    let subject = "";
 
     const addTask = async () => {
       const trimmed = taskText.trim();
       if (!trimmed) return;
-      await this.appendTask(trimmed);
+      await this.appendTask(trimmed, subject);
       this.close();
     };
 
@@ -397,6 +702,41 @@ class AddTaskModal extends Modal {
         setTimeout(() => text.inputEl.focus(), 50);
       });
 
+    const knownSubjects = Object.keys(this.plugin.settings.subjectColors).sort((a, b) =>
+      a.localeCompare(b)
+    );
+
+    new Setting(contentEl)
+      .setName("Subject")
+      .setDesc("Optional #SubjectName tag. Leave blank to leave it untagged.")
+      .addText(text => {
+        text.setPlaceholder("e.g. MAT1100");
+        if (knownSubjects.length > 0) {
+          // Native datalist: suggests existing subjects while still allowing
+          // free text for a brand-new one.
+          text.inputEl.setAttribute("list", "cdp-subject-suggestions");
+          const datalist = contentEl.createEl("datalist", { attr: { id: "cdp-subject-suggestions" } });
+          for (const s of knownSubjects) datalist.createEl("option", { attr: { value: s } });
+        }
+        text.onChange(v => {
+          // Keep in sync with SUBJECT_TAG_RE's character class.
+          subject = v.trim().replace(/[^\wæøåÆØÅ]/g, "");
+        });
+      });
+
+    new Setting(contentEl)
+      .setName("Due date")
+      .addText(text => {
+        text.setValue(this.date);
+        text.inputEl.type = "date";
+        text.inputEl.addEventListener("change", () => {
+          // A native date input's value is always YYYY-MM-DD (or empty if
+          // cleared) — only accept it when non-empty so `this.date` always
+          // stays a valid date collectTasks() can parse.
+          if (text.inputEl.value) this.date = text.inputEl.value;
+        });
+      });
+
     new Setting(contentEl)
       .addButton(btn =>
         btn.setButtonText("Add task")
@@ -405,9 +745,13 @@ class AddTaskModal extends Modal {
       );
   }
 
-  private async appendTask(text: string) {
-    const newLine = `- [ ] ${text} 📅 ${this.date}`;
-    const abstractFile = this.app.vault.getAbstractFileByPath(this.todoFile);
+  private async appendTask(text: string, subject: string) {
+    // Normalize the user-configured path once here: handles backslashes on
+    // Windows and stray leading/trailing slashes before it reaches any vault API.
+    const todoFile = normalizePath(this.plugin.settings.todoFile);
+    const tagSuffix = subject ? ` #${subject}` : "";
+    const newLine = `- [ ] ${text}${tagSuffix} 📅 ${this.date}`;
+    const abstractFile = this.app.vault.getAbstractFileByPath(todoFile);
 
     if (abstractFile instanceof TFile) {
       const content = await this.app.vault.read(abstractFile);
@@ -415,17 +759,17 @@ class AddTaskModal extends Modal {
       await this.app.vault.modify(abstractFile, content + sep + newLine + "\n");
     } else {
       // Create the file (and any missing parent folders)
-      const parts = this.todoFile.split("/");
+      const parts = todoFile.split("/");
       if (parts.length > 1) {
         const folderPath = parts.slice(0, -1).join("/");
         if (!this.app.vault.getAbstractFileByPath(folderPath)) {
           await this.app.vault.createFolder(folderPath);
         }
       }
-      await this.app.vault.create(this.todoFile, newLine + "\n");
+      await this.app.vault.create(todoFile, newLine + "\n");
     }
 
-    new Notice(`Added to ${this.todoFile}`);
+    new Notice(`Added to ${todoFile}`);
   }
 
   onClose() {
@@ -437,17 +781,36 @@ class AddTaskModal extends Modal {
 
 class CalendarSettingTab extends PluginSettingTab {
   plugin: CalendarDeadlinesPlugin;
+  private renderToken = 0;
 
   constructor(app: App, plugin: CalendarDeadlinesPlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }
 
-  display() {
+  async display() {
+    // display() awaits collectTasks() mid-render; if it's re-entered before
+    // that resolves (e.g. the tab is closed/reopened quickly), the stale
+    // call must not keep mutating containerEl after the newer one has.
+    const token = ++this.renderToken;
     const { containerEl } = this;
     containerEl.empty();
 
     containerEl.createEl("h2", { text: "Calendar & Deadlines" });
+
+    containerEl.createEl("h3", { text: "General" });
+
+    new Setting(containerEl)
+      .setName("Open sidebar on startup")
+      .setDesc("Automatically opens the calendar sidebar when Obsidian starts.")
+      .addToggle(toggle =>
+        toggle
+          .setValue(this.plugin.settings.autoOpenSidebar)
+          .onChange(async (value) => {
+            this.plugin.settings.autoOpenSidebar = value;
+            await this.plugin.saveSettings();
+          })
+      );
 
     containerEl.createEl("h3", { text: "Quick add" });
 
@@ -459,7 +822,7 @@ class CalendarSettingTab extends PluginSettingTab {
           .setPlaceholder("TODO.md")
           .setValue(this.plugin.settings.todoFile)
           .onChange(async (value) => {
-            this.plugin.settings.todoFile = value.trim() || "TODO.md";
+            this.plugin.settings.todoFile = normalizePath(value.trim() || "TODO.md");
             await this.plugin.saveSettings();
           })
       );
@@ -487,6 +850,47 @@ class CalendarSettingTab extends PluginSettingTab {
               await this.plugin.saveSettings();
             })
         );
+    }
+
+    containerEl.createEl("h3", { text: "Subject colors" });
+    containerEl.createEl("p", {
+      text: "Each subject tag (e.g. #MAT1100) gets a color automatically. Change any of them below — your choice is remembered.",
+      cls: "cdp-setting-desc",
+    });
+
+    const tasks = await collectTasks(this.app);
+    if (token !== this.renderToken) return; // superseded by a newer display() call
+
+    const subjects = [...new Set(tasks.flatMap(t => t.subjects))].sort((a, b) =>
+      a.localeCompare(b)
+    );
+
+    if (subjects.length === 0) {
+      containerEl.createEl("p", {
+        text: "No subject tags found yet. Add #SubjectName to a task to see it here.",
+        cls: "cdp-setting-desc",
+      });
+      return;
+    }
+
+    let assignedNewColor = false;
+    for (const subject of subjects) {
+      const isNew = !(subject in this.plugin.settings.subjectColors);
+      const color = getSubjectColor(this.plugin.settings, subject);
+      if (isNew) assignedNewColor = true;
+
+      new Setting(containerEl)
+        .setName(subject)
+        .addColorPicker(picker =>
+          picker.setValue(color).onChange(async (value) => {
+            this.plugin.settings.subjectColors[subject] = value;
+            await this.plugin.saveSettings();
+          })
+        );
+    }
+
+    if (assignedNewColor) {
+      await this.plugin.saveSettings();
     }
   }
 }
@@ -522,13 +926,23 @@ export default class CalendarDeadlinesPlugin extends Plugin {
       name: "Open as modal",
       callback: async () => {
         const tasks = await collectTasks(this.app);
-        new CalendarModal(this.app, tasks, this.settings.todoFile).open();
+        await this.ensureSubjectColors(tasks);
+        new CalendarModal(this.app, this, tasks).open();
       },
+    });
+
+    this.addCommand({
+      id: "create-task",
+      name: "Create task",
+      callback: () => new AddTaskModal(this.app, this).open(),
     });
 
     this.addSettingTab(new CalendarSettingTab(this.app, this));
 
     this.app.workspace.onLayoutReady(async () => {
+      if (this.settings.autoOpenSidebar) {
+        await this.activateSidebarView();
+      }
       await this.checkNotifications();
       await this.updateBadge();
     });
@@ -549,7 +963,9 @@ export default class CalendarDeadlinesPlugin extends Plugin {
 
   async loadSettings() {
     const data: Partial<SavedData> = (await this.loadData()) ?? {};
-    this.settings    = Object.assign({}, DEFAULT_SETTINGS, data.settings);
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, data.settings);
+    this.settings.subjectColors = { ...data.settings?.subjectColors };
+    this.settings.activeSubjectFilter = [...(data.settings?.activeSubjectFilter ?? [])];
     this.notified    = new Set(data.notified ?? []);
     this.snoozedUntil = data.snoozedUntil ?? {};
   }
@@ -562,6 +978,23 @@ export default class CalendarDeadlinesPlugin extends Plugin {
     } satisfies SavedData);
   }
 
+  // Auto-assigns a color (via getSubjectColor) to any subject seen in `tasks`
+  // that doesn't have one yet, and persists if anything new was assigned.
+  async ensureSubjectColors(tasks: DeadlineTask[]) {
+    const subjects = new Set(tasks.flatMap(t => t.subjects));
+    let changed = false;
+    for (const subject of subjects) {
+      const isNew = !(subject in this.settings.subjectColors);
+      getSubjectColor(this.settings, subject);
+      if (isNew) changed = true;
+    }
+    if (changed) await this.saveSettings();
+  }
+
+  // Deliberately ignores activeSubjectFilter: the badge sits on the ribbon
+  // icon, outside the sidebar/modal, so it always reflects the total across
+  // all subjects. The in-panel stats bar is the one that respects the filter
+  // (see renderCalendar()), and calls it out explicitly when active.
   private async updateBadge() {
     if (!this.badgeEl) return;
     const tasks = await collectTasks(this.app);

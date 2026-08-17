@@ -1,19 +1,27 @@
 # Calendar & Deadlines
 
-An [Obsidian](https://obsidian.md) plugin that shows a mini calendar with deadline overview in a sidebar panel or modal. See overdue tasks, get reminders, and navigate directly to any task with a single click.
+An [Obsidian](https://obsidian.md) plugin that shows a mini calendar with deadline overview in a sidebar panel or modal. See overdue tasks, filter by subject, get reminders, and jump straight to any task with a single click.
 
-Scans your vault for incomplete tasks with due dates and highlights them on the calendar.
+Scans your vault for tasks with due dates and highlights them on the calendar. No network calls, no telemetry, everything stays local.
 
 ## Features
 
 - Mini calendar in the right sidebar with deadline indicators
-- Stats bar showing overdue, today, and this week at a glance
+- Stats bar showing overdue, today, and this week at a glance (respects the active subject filter)
 - List of upcoming and overdue tasks with relative dates
 - **Click any task to open the source file at the exact line**
+- **Mark a task done directly from the calendar**
+- **Postpone a task by one day** with a single click
+- **Collapse the deadline list** when you just want the calendar
+- Subject tagging via `#SubjectName` — auto-assigned colors, editable in settings
+- Filter chips per subject, plus an **All** chip that specifically covers tasks with no subject tag
+- Colored dots per subject on each calendar day (with overflow indicator when a day has several)
 - Deadline reminders with **snooze** (1 hour or tomorrow morning)
-- Overdue badge on the ribbon icon — visible even when the sidebar is closed
+- Overdue badge on the ribbon icon — visible even when the sidebar is closed, always shows the true total regardless of active filter
+- Quick-add: click a date on the calendar, or run **Create task** from the command palette, to add a task without leaving Obsidian
+- Optional auto-open of the sidebar on startup
 - Navigate between months
-- Auto-refreshes when notes are saved
+- Sidebar view auto-refreshes when notes are saved (the modal view doesn't watch for outside edits — reopen it to see changes made elsewhere)
 - Respects Obsidian's light and dark theme
 
 ## Recommended workflow
@@ -25,16 +33,16 @@ The plugin scans your entire vault, but the most effective setup is to **keep al
 ```markdown
 # TODO
 
-- [ ] Send invoice to client 📅 2025-06-15
+- [ ] Send invoice to client #Work 📅 2025-06-15
   → [[Projects/Client Work]]
 
-- [ ] Review pull request 📅 2025-06-12
+- [ ] Review pull request #Work 📅 2025-06-12
   → [[Work/Dev]]
 
-- [ ] Buy birthday gift 📅 2025-06-20
+- [ ] Buy birthday gift #Personal 📅 2025-06-20
   → [[Personal/Family]]
 
-- [ ] Finish report draft due:: 2025-06-18
+- [ ] Finish report draft #Reports due:: 2025-06-18
   → [[Work/Reports/Q2 Report]]
 ```
 
@@ -42,17 +50,36 @@ Use Obsidian's `[[links]]` on the line below or within the task text to point to
 
 This pattern keeps your notes clean (no due dates scattered everywhere) while giving the plugin a fast, predictable place to scan.
 
-## Supported date formats
+## Supported task format
 
-The plugin recognizes due dates in the following formats on any incomplete task line:
+The plugin recognizes tasks in the following format on any incomplete task line:
 
 ```
 - [ ] Task name 📅 2025-06-15
 - [ ] Task name due:: 2025-06-15
 - [ ] Task name ⏳ 2025-06-15
+- [ ] Task name #SubjectName 📅 2025-06-15
 ```
 
-Dates must be in `YYYY-MM-DD` format. Compatible with the [Tasks plugin](https://github.com/obsidian-tasks-group/obsidian-tasks) and [Dataview](https://github.com/blacksmithgu/obsidian-dataview) date syntax.
+Dates must be in `YYYY-MM-DD` format. A task can have zero, one, or multiple `#SubjectName` tags — each one adds the task to that subject's filter and gives it that subject's color on the calendar. Tasks with no subject tag show up under the **All** chip so nothing gets lost.
+
+Compatible with the [Tasks plugin](https://github.com/obsidian-tasks-group/obsidian-tasks) and [Dataview](https://github.com/blacksmithgu/obsidian-dataview) date syntax — but this plugin has no dependency on either. It reads and writes plain Markdown directly.
+
+## Subject colors & filtering
+
+The first time a `#SubjectName` tag shows up anywhere in your vault, it's automatically assigned a color. You can change any subject's color under **Settings → Community plugins → Calendar & Deadlines → Subject colors**.
+
+Toggle subject chips above the calendar to filter what's shown — the calendar dots, the deadline list, and the stats bar all update together. Your filter selection is remembered between sessions. Turning off every chip shows nothing rather than falling back to "show all" — toggle at least one chip back on to see tasks again.
+
+The ribbon badge is the one exception: it always shows your true total overdue count, regardless of your active filter, since it's meant to be visible even when the panel is closed.
+
+## Commands
+
+Run these from the command palette (`Ctrl/Cmd + P`):
+
+- **Calendar & Deadlines: Open sidebar** — opens the calendar in the right panel
+- **Calendar & Deadlines: Open as modal** — opens the calendar as a floating window
+- **Calendar & Deadlines: Create task** — quick-add a task from anywhere, without needing the calendar open first
 
 ## Notifications
 
@@ -78,9 +105,9 @@ Configure which offsets to use under **Settings → Community plugins → Calend
 - Click the **calendar icon** in the ribbon to open the sidebar view
 - A **red badge** on the ribbon icon shows the number of overdue tasks
 - Click any task in the list to open the file at that line
-- Use the command palette (`Ctrl/Cmd + P`) and search for:
-  - **Calendar: Open sidebar** — opens the calendar in the right panel
-  - **Calendar: Open as modal** — opens the calendar as a floating window
+- Click the checkbox next to a task to mark it done, or the postpone button to push it a day
+- Click any date on the calendar, or run **Create task**, to quick-add a task — the Add Task dialog lets you set the description, an optional subject (with autocomplete from subjects you've already used), and the due date, all before saving
+- Enable **Auto-open sidebar on startup** in settings if you want it there every time you open Obsidian
 
 ## Installation
 
@@ -98,4 +125,4 @@ Configure which offsets to use under **Settings → Community plugins → Calend
 
 ## Compatibility
 
-Requires Obsidian 1.4.0 or higher.
+Requires Obsidian 1.4.0 or higher. Works on desktop and mobile. On iOS, subject autocomplete suggestions may not appear when adding a task, since iOS Safari/WKWebView doesn't support the underlying `<datalist>` element — you can still type a subject manually.
