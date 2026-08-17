@@ -1,0 +1,10 @@
+{
+  "id": "calendar-deadlines",
+  "name": "Calendar & Deadlines",
+  "version": "1.0.0",
+  "minAppVersion": "1.4.0",
+  "description": "Mini calendar with deadline tracking, reminders, and snooze in sidebar and modal.",
+  "author": "Ian",
+  "authorUrl": "",
+  "isDesktopOnly": false
+}
