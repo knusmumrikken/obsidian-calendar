@@ -19,7 +19,7 @@ Built with Claude Code, reviewed and tested by me.
 - Filter chips per subject, plus a **No tag** chip for untagged tasks and an **All** chip that resets the filter to show everything
 - Colored dots per subject on each calendar day (with overflow indicator when a day has several)
 - Deadline reminders with **snooze** (1 hour or tomorrow morning)
-- Overdue badge on the ribbon icon — visible even when the sidebar is closed, always shows the true total regardless of active filter
+- Overdue badge on the ribbon icon. Visible even when the sidebar is closed, always shows the true total regardless of active filter
 - Quick-add: click a date on the calendar, or run **Create task** from the command palette, to add a task without leaving Obsidian
 - Optional auto-open of the sidebar on startup
 - Navigate between months
