@@ -15,11 +15,11 @@ Built with Claude Code, reviewed and tested by me.
 - **Mark a task done directly from the calendar**
 - **Postpone a task by one day** with a single click
 - **Collapse the deadline list** when you just want the calendar
-- Subject tagging via `#SubjectName` — auto-assigned colors, editable in settings
+- Subject tagging via `#SubjectName` auto-assigned colors, editable in settings
 - Filter chips per subject, plus an **All** chip that specifically covers tasks with no subject tag
 - Colored dots per subject on each calendar day (with overflow indicator when a day has several)
 - Deadline reminders with **snooze** (1 hour or tomorrow morning)
-- Overdue badge on the ribbon icon — visible even when the sidebar is closed, always shows the true total regardless of active filter
+- Overdue badge on the ribbon icon. Visible even when the sidebar is closed, always shows the true total regardless of active filter
 - Quick-add: click a date on the calendar, or run **Create task** from the command palette, to add a task without leaving Obsidian
 - Optional auto-open of the sidebar on startup
 - Navigate between months
@@ -28,7 +28,7 @@ Built with Claude Code, reviewed and tested by me.
 
 ## Recommended workflow
 
-The plugin scans your entire vault, but the most effective setup is to **keep all tasks with due dates in one central file** — for example `TODO.md`. This gives you a single place to manage deadlines, while notes elsewhere in the vault contain the actual content.
+The plugin scans your entire vault, but the most effective setup is to **keep all tasks with due dates in one central file**  (for example `TODO.md`). This gives you a single place to manage deadlines, while notes elsewhere in the vault contain the actual content.
 
 **TODO.md** acts as your control panel:
 
