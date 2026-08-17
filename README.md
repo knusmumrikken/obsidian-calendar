@@ -4,6 +4,8 @@ An [Obsidian](https://obsidian.md) plugin that shows a mini calendar with deadli
 
 Scans your vault for tasks with due dates and highlights them on the calendar. No network calls, no telemetry, everything stays local.
 
+Built with Claude Code, reviewed and tested by me.
+
 ## Features
 
 - Mini calendar in the right sidebar with deadline indicators
