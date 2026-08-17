@@ -15,20 +15,20 @@ Built with Claude Code, reviewed and tested by me.
 - **Mark a task done directly from the calendar**
 - **Postpone a task by one day** with a single click
 - **Collapse the deadline list** when you just want the calendar
-- Subject tagging via `#SubjectName` — auto-assigned colors, editable in settings
-- Filter chips per subject, plus an **All** chip that specifically covers tasks with no subject tag
+- Subject tagging via `#SubjectName`, with colors auto-assigned and editable in settings
+- Filter chips per subject, plus a **No tag** chip for untagged tasks and an **All** chip that resets the filter to show everything
 - Colored dots per subject on each calendar day (with overflow indicator when a day has several)
 - Deadline reminders with **snooze** (1 hour or tomorrow morning)
 - Overdue badge on the ribbon icon — visible even when the sidebar is closed, always shows the true total regardless of active filter
 - Quick-add: click a date on the calendar, or run **Create task** from the command palette, to add a task without leaving Obsidian
 - Optional auto-open of the sidebar on startup
 - Navigate between months
-- Sidebar view auto-refreshes when notes are saved (the modal view doesn't watch for outside edits — reopen it to see changes made elsewhere)
+- Sidebar view auto-refreshes when notes are saved (the modal view doesn't watch for outside edits, so reopen it to see changes made elsewhere)
 - Respects Obsidian's light and dark theme
 
 ## Recommended workflow
 
-The plugin scans your entire vault, but the most effective setup is to **keep all tasks with due dates in one central file** — for example `TODO.md`. This gives you a single place to manage deadlines, while notes elsewhere in the vault contain the actual content.
+The plugin scans your entire vault, but the most effective setup is to **keep all tasks with due dates in one central file**, like `TODO.md`. This gives you a single place to manage deadlines, while notes elsewhere in the vault contain the actual content.
 
 **TODO.md** acts as your control panel:
 
@@ -48,7 +48,7 @@ The plugin scans your entire vault, but the most effective setup is to **keep al
   → [[Work/Reports/Q2 Report]]
 ```
 
-Use Obsidian's `[[links]]` on the line below or within the task text to point to the relevant note. When the calendar shows a deadline, click the task to open `TODO.md` at that line — then follow the link to the actual content.
+Use Obsidian's `[[links]]` on the line below or within the task text to point to the relevant note. When the calendar shows a deadline, click the task to open `TODO.md` at that line, then follow the link to the actual content.
 
 This pattern keeps your notes clean (no due dates scattered everywhere) while giving the plugin a fast, predictable place to scan.
 
@@ -63,15 +63,15 @@ The plugin recognizes tasks in the following format on any incomplete task line:
 - [ ] Task name #SubjectName 📅 2025-06-15
 ```
 
-Dates must be in `YYYY-MM-DD` format. A task can have zero, one, or multiple `#SubjectName` tags — each one adds the task to that subject's filter and gives it that subject's color on the calendar. Tasks with no subject tag show up under the **All** chip so nothing gets lost.
+Dates must be in `YYYY-MM-DD` format. A task can have zero, one, or multiple `#SubjectName` tags. Each one adds the task to that subject's filter and gives it that subject's color on the calendar. Tasks with no subject tag show up under the **No tag** chip so nothing gets lost.
 
-Compatible with the [Tasks plugin](https://github.com/obsidian-tasks-group/obsidian-tasks) and [Dataview](https://github.com/blacksmithgu/obsidian-dataview) date syntax — but this plugin has no dependency on either. It reads and writes plain Markdown directly.
+Compatible with the [Tasks plugin](https://github.com/obsidian-tasks-group/obsidian-tasks) and [Dataview](https://github.com/blacksmithgu/obsidian-dataview) date syntax, but this plugin has no dependency on either. It reads and writes plain Markdown directly.
 
 ## Subject colors & filtering
 
 The first time a `#SubjectName` tag shows up anywhere in your vault, it's automatically assigned a color. You can change any subject's color under **Settings → Community plugins → Calendar & Deadlines → Subject colors**.
 
-Toggle subject chips above the calendar to filter what's shown — the calendar dots, the deadline list, and the stats bar all update together. Your filter selection is remembered between sessions. Turning off every chip shows nothing rather than falling back to "show all" — toggle at least one chip back on to see tasks again.
+Toggle subject chips above the calendar to filter what's shown. The calendar dots, the deadline list, and the stats bar all update together, and your filter selection is remembered between sessions. Turning off every chip shows nothing rather than falling back to "show all," so click the **All** chip to reset and see everything again.
 
 The ribbon badge is the one exception: it always shows your true total overdue count, regardless of your active filter, since it's meant to be visible even when the panel is closed.
 
@@ -79,17 +79,17 @@ The ribbon badge is the one exception: it always shows your true total overdue c
 
 Run these from the command palette (`Ctrl/Cmd + P`):
 
-- **Calendar & Deadlines: Open sidebar** — opens the calendar in the right panel
-- **Calendar & Deadlines: Open as modal** — opens the calendar as a floating window
-- **Calendar & Deadlines: Create task** — quick-add a task from anywhere, without needing the calendar open first
+- **Calendar & Deadlines: Open sidebar**: opens the calendar in the right panel
+- **Calendar & Deadlines: Open as modal**: opens the calendar as a floating window
+- **Calendar & Deadlines: Create task**: quick-add a task from anywhere, without needing the calendar open first
 
 ## Notifications
 
 Reminders fire as Obsidian toasts while the app is open. Each notification includes:
 
-- **Snooze 1h** — reminds you again in one hour
-- **Tomorrow** — reminds you again at 9:00 the next morning
-- **Open** — jumps directly to the task in your vault
+- **Snooze 1h**: reminds you again in one hour
+- **Tomorrow**: reminds you again at 9:00 the next morning
+- **Open**: jumps directly to the task in your vault
 
 Configure which offsets to use under **Settings → Community plugins → Calendar & Deadlines**:
 
@@ -127,4 +127,4 @@ Configure which offsets to use under **Settings → Community plugins → Calend
 
 ## Compatibility
 
-Requires Obsidian 1.4.0 or higher. Works on desktop and mobile. On iOS, subject autocomplete suggestions may not appear when adding a task, since iOS Safari/WKWebView doesn't support the underlying `<datalist>` element — you can still type a subject manually.
+Requires Obsidian 1.4.0 or higher. Works on desktop and mobile. On iOS, subject autocomplete suggestions may not appear when adding a task, since iOS Safari/WKWebView doesn't support the underlying `<datalist>` element, but you can still type a subject manually.

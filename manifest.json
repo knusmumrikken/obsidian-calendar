@@ -1,10 +1,13 @@
 {
   "id": "calendar-deadlines",
   "name": "Calendar & Deadlines",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "minAppVersion": "1.4.0",
   "description": "Mini calendar with deadline tracking, color-coded subject filtering, reminders, and snooze in sidebar and modal.",
   "author": "Ian",
   "authorUrl": "",
+  "fundingUrl": {
+    "Buy Me a Coffee": "https://buymeacoffee.com/knusmumrikken"
+  },
   "isDesktopOnly": false
 }

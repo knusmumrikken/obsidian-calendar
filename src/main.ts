@@ -57,7 +57,7 @@ const OFFSET_OPTIONS: { days: number; label: string; desc: string }[] = [
 
 // Pseudo-subject used to represent tasks with no #subject tag, so they get
 // their own filter chip and dot instead of being unconditionally shown.
-const UNCATEGORIZED = "All";
+const UNCATEGORIZED = "No tag";
 
 // ─── Subject colors ───────────────────────────────────────────────────────────
 
@@ -373,6 +373,18 @@ function renderCalendar(container: HTMLElement, options: RenderCalendarOptions) 
   }
   if (allSubjects.length > 0) {
     const filterRow = container.createDiv({ cls: "cdp-filter-row" });
+
+    // "All" resets the filter to show everything — tagged and untagged —
+    // rather than representing a subject of its own like the other chips.
+    const showingAll = activeSubjectFilter.length === 0;
+    const allChip = filterRow.createEl("button", {
+      text: "All",
+      cls: `cdp-chip${showingAll ? "" : " cdp-chip-hidden"}`,
+    });
+    allChip.style.setProperty("--cdp-chip-color", "var(--interactive-accent)");
+    allChip.setAttribute("title", "Show everything");
+    allChip.addEventListener("click", () => onFilterChange([]));
+
     for (const subject of allSubjects) {
       const isHidden = activeSubjectFilter.includes(subject);
       const chip = filterRow.createEl("button", {
